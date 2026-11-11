@@ -24,6 +24,8 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 # The hook script ships inside the app too, so agent configs can point at
 # the installed app rather than at this repo (which may move).
 mkdir -p "$APP/Contents/Resources"
+# App icon (regenerate with: swift scripts/make-icon.swift)
+cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/hooks/nocnoc-hook.sh" "$APP/Contents/Resources/nocnoc-hook.sh"
 chmod +x "$APP/Contents/Resources/nocnoc-hook.sh"
 

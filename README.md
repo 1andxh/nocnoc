@@ -1,5 +1,7 @@
 # nocnoc
 
+<img src="Resources/AppIcon-1024.png" width="128" alt="nocnoc icon">
+
 A macOS menu-bar app that lets coding agents (Claude Code and Codex) reach
 you when you're **not** looking at VS Code or the terminal. When an agent
 needs a permission, has a question, or finishes, you get a notification or a
@@ -169,6 +171,6 @@ no "needs you" event.
 | `Sources/nocnoc/` | the menu-bar app: state, notifications, menu, question panel |
 | `Sources/nocnoc-mcp/` | the stdio MCP server executable |
 | `hooks/nocnoc-hook.sh` | what agents run; forwards the event to the app with `curl` |
-| `scripts/` | `build-app.sh` (bundle + sign), `install.sh` |
+| `scripts/` | `build-app.sh` (bundle + sign), `install.sh`, `make-icon.swift` (renders the app icon) |
 | `Tests/NocnocCoreTests/` | unit tests and real socket round-trips |
 | `.claude/hooks/spy.sh` | the Phase 0 recorder used to capture real hook payloads |
