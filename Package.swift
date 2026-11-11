@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "nocnoc", targets: ["nocnoc"]),
+        .executable(name: "nocnoc-mcp", targets: ["nocnoc-mcp"]),
     ],
     targets: [
         // Everything testable without a UI: socket server, HTTP parsing,
@@ -17,6 +18,12 @@ let package = Package(
         // The menu-bar app: state, notifications, menu UI.
         .executableTarget(
             name: "nocnoc",
+            dependencies: ["NocnocCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // stdio MCP server exposing ask_user; agents launch it (Phase 5).
+        .executableTarget(
+            name: "nocnoc-mcp",
             dependencies: ["NocnocCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
