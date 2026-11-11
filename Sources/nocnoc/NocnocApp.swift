@@ -1,31 +1,27 @@
 import SwiftUI
 import NocnocCore
 
+/// Plain AppKit entry point. Everything on screen is AppKit-owned (status
+/// item, glass panels with SwiftUI inside), so there's no SwiftUI App/Scene:
+/// an otherwise-empty Settings scene was showing a stray blank window.
 @main
-struct NocnocApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @ObservedObject private var state = AppState.shared
+enum NocnocMain {
+    private static let delegate = AppDelegate()
 
-    var body: some Scene {
-        MenuBarExtra {
-            PopoverView(state: state)
-        } label: {
-            if state.waiting.isEmpty {
-                Image(systemName: state.away ? "bell.badge.fill" : "bell.slash")
-            } else {
-                // Something is waiting for you.
-                Label("\(state.waiting.count)", systemImage: "exclamationmark.bubble.fill")
-                    .labelStyle(.titleAndIcon)
-            }
-        }
-        // .window: a popover-like window with real SwiftUI content, instead of a system menu.
-        .menuBarExtraStyle(.window)
+    static func main() {
+        let app = NSApplication.shared
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)   // menu-bar only (also LSUIElement in Info.plist)
+        app.run()
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        MainActor.assumeIsolated { AppState.shared.start() }
+        MainActor.assumeIsolated {
+            AppState.shared.start()
+            StatusItemController.shared.install()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -37,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct PopoverView: View {
     @ObservedObject var state: AppState
+    /// Close the popover (after answering the last waiting item, or Quit-like actions).
+    var onDone: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -51,9 +49,10 @@ struct PopoverView: View {
             recent
             footer
         }
-        .padding(16)
-        .frame(width: 360)
-        .background(GlassBackground())
+        .padding(Glass.padding)
+        .frame(width: StatusItemController.width, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .overlay(GlassEdge())
     }
 
     private var header: some View {
@@ -99,7 +98,10 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionTitle("Waiting for you", count: state.waiting.count)
             ForEach(state.waiting) { request in
-                WaitingCard(request: request, state: state)
+                WaitingCard(request: request, state: state, afterAnswer: {
+                    // Answered the last one: nothing left here, so get out of the way.
+                    if state.waiting.count <= 1 { onDone() }
+                })
             }
         }
     }
@@ -185,6 +187,7 @@ private struct SectionTitle: View {
 private struct WaitingCard: View {
     let request: PendingRequest
     @ObservedObject var state: AppState
+    let afterAnswer: () -> Void
 
     private var event: AgentEvent { request.event }
 
@@ -204,25 +207,25 @@ private struct WaitingCard: View {
                     .font(.callout.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    Button("Answer in VS Code") { state.answerInEditor(request.id) }
+                    Button("Answer in VS Code") { afterAnswer(); state.answerInEditor(request.id) }
                         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Answer…") { QuestionPanels.shared.focus(request.id) }
+                    Button("Answer…") { afterAnswer(); QuestionPanels.shared.focus(request.id) }
                         .buttonStyle(CapsuleButtonStyle(prominent: true))
                 }
             } else {
                 Text(event.title).font(.callout.weight(.semibold))
                 CommandView(text: event.detail)
                 HStack(spacing: 8) {
-                    Button("VS Code") { state.answerInEditor(request.id) }
+                    Button("VS Code") { afterAnswer(); state.answerInEditor(request.id) }
                         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
                         .help("Hand this back to the prompt in VS Code")
                     Spacer()
-                    Button("Deny") { state.answer(request.id, .decided(.deny)) }
+                    Button("Deny") { afterAnswer(); state.answer(request.id, .decided(.deny)) }
                         .buttonStyle(CapsuleButtonStyle(destructive: true))
                     // Never Allow what can't be read in full here.
                     if !event.detailIsTruncated {
-                        Button("Allow") { state.answer(request.id, .decided(.allow)) }
+                        Button("Allow") { afterAnswer(); state.answer(request.id, .decided(.allow)) }
                             .buttonStyle(CapsuleButtonStyle(prominent: true))
                     }
                 }
@@ -233,35 +236,6 @@ private struct WaitingCard: View {
             }
         }
         .glassCard()
-    }
-}
-
-/// The full command, monospaced and selectable; scrolls when it's long.
-private struct CommandView: View {
-    let text: String
-
-    private var isLong: Bool {
-        text.count > 360 || text.split(separator: "\n", omittingEmptySubsequences: false).count > 6
-    }
-
-    var body: some View {
-        Group {
-            if isLong {
-                ScrollView { content }.frame(height: 120)
-            } else {
-                content
-            }
-        }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.primary.opacity(0.06)))
-    }
-
-    private var content: some View {
-        Text(text)
-            .font(.system(.caption, design: .monospaced))
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -300,7 +274,7 @@ private struct RecentRow: View {
                 Text(Self.ago(event.at)).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: Glass.innerRadius, style: .continuous)
                 .fill(.primary.opacity(hovering ? 0.07 : 0)))
             .contentShape(Rectangle())
         }
