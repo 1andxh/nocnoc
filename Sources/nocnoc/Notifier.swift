@@ -2,22 +2,11 @@ import AppKit
 import UserNotifications
 import NocnocCore
 
-/// macOS notifications.
-///
-/// Info events (finished, needs you, questions): one notification per agent
-/// session, replaced in place so they don't stack.
-/// Permission requests: one per request, with Allow / Deny buttons, removed
-/// as soon as the request ends however it ends.
-/// Questions get no notification: their floating panel is the alert.
+/// macOS notifications, for information only: "finished" and Claude's own
+/// "needs you". One per agent session, replaced in place so they don't stack.
+/// Prompts (permissions, questions) never use notifications: they're glass
+/// cards in the app (PromptPanel.swift), where they can't be competed with.
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
-    enum Category {
-        static let permission = "permission"                 // Allow + Deny
-        static let permissionDenyOnly = "permission-deny-only" // command too long to show in full
-    }
-    enum Action {
-        static let allow = "allow"
-        static let deny = "deny"
-    }
 
     var onStatus: ((String) -> Void)?
     /// Sessions whose current notification is a "needs you" (main thread only).
@@ -26,19 +15,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     func setUp() {
         center.delegate = self
-
-        // .authenticationRequired: macOS only runs Allow when the Mac is unlocked.
-        let allow = UNNotificationAction(identifier: Action.allow, title: "Allow", options: [.authenticationRequired])
-        let deny = UNNotificationAction(identifier: Action.deny, title: "Deny", options: [.destructive])
-        // .customDismissAction: we get told when you close the notification,
-        // so we can hand the request back to VS Code instead of leaving it hanging.
-        center.setNotificationCategories([
-            UNNotificationCategory(identifier: Category.permission, actions: [allow, deny],
-                                   intentIdentifiers: [], options: [.customDismissAction]),
-            UNNotificationCategory(identifier: Category.permissionDenyOnly, actions: [deny],
-                                   intentIdentifiers: [], options: [.customDismissAction]),
-        ])
-
+        center.setNotificationCategories([])   // drop the old Allow/Deny categories
         center.requestAuthorization(options: [.alert, .sound]) { granted, error in
             Log.info("notification authorization granted=\(granted) error=\(error.map { "\($0)" } ?? "none")")
             self.refreshStatus()
@@ -80,29 +57,6 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private static func sessionID(_ agent: String, _ session: String) -> String { "\(agent)-\(session)" }
 
-    func postPermission(_ request: PendingRequest) {
-        let event = request.event
-        let content = baseContent(event)
-        content.interruptionLevel = .timeSensitive
-        content.userInfo["requestID"] = request.id.uuidString
-        if event.bodyIsTruncated {
-            // Never offer Allow for something you can't fully read here.
-            content.categoryIdentifier = Category.permissionDenyOnly
-            content.body += "\nToo long to show — open the nocnoc menu or VS Code to review."
-        } else {
-            content.categoryIdentifier = Category.permission
-        }
-        add(Self.permissionID(request.id), content)
-    }
-
-    func removePermission(_ id: UUID) {
-        let nid = Self.permissionID(id)
-        center.removeDeliveredNotifications(withIdentifiers: [nid])
-        center.removePendingNotificationRequests(withIdentifiers: [nid])
-    }
-
-    private static func permissionID(_ id: UUID) -> String { "req-\(id.uuidString)" }
-
     private func baseContent(_ event: AgentEvent) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = event.project.map { "\($0) — \(event.title)" } ?? event.title
@@ -129,27 +83,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        let info = response.notification.request.content.userInfo
-        let dir = info["projectDir"] as? String
-        let requestID = (info["requestID"] as? String).flatMap(UUID.init(uuidString:))
-        let action = response.actionIdentifier
-
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                let state = AppState.shared
-                guard let id = requestID else {
-                    // Info notification: clicking it just takes you there.
-                    if action == UNNotificationDefaultActionIdentifier { Editor.focus(projectDir: dir) }
-                    return
-                }
-                switch action {
-                case Action.allow: state.answer(id, .decided(.allow))
-                case Action.deny: state.answer(id, .decided(.deny))
-                case UNNotificationDefaultActionIdentifier: state.answerInEditor(id)   // clicked the body
-                case UNNotificationDismissActionIdentifier: state.answer(id, .released) // closed it
-                default: break
-                }
-            }
+        // Clicking a notification takes you to that project in VS Code.
+        let dir = response.notification.request.content.userInfo["projectDir"] as? String
+        if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            DispatchQueue.main.async { Editor.focus(projectDir: dir) }
         }
         completionHandler()
     }

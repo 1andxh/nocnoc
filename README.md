@@ -10,21 +10,24 @@ it can carry on without you switching windows.
 
 | The agent… | You get… | You can… |
 |---|---|---|
-| wants permission to run a tool | a notification showing the full command | **Allow**, **Deny**, or open VS Code |
-| asks a multiple-choice question (Claude's AskUserQuestion) | a floating panel, top right, with a sound | pick options, type your own answer, **Send** |
-| calls `ask_user` mid-task (MCP tool, any agent) | the same panel | answer, or let it time out |
-| needs your attention, or finished | a notification | click it to jump to that project in VS Code |
+| wants permission to run a tool | a glass card (top right) with the full command and a sound | **Allow**, **Deny**, or hand it back to VS Code |
+| asks a multiple-choice question (Claude's AskUserQuestion) | a glass card with the options | pick options, type your own answer, **Send** |
+| calls `ask_user` mid-task (MCP tool, any agent) | the same question card | answer, or let it time out |
+| finished, or needs your attention | a macOS notification | click it to jump to that project in VS Code |
+
+Prompts only ever come through the app's own cards, never as macOS
+notifications, so nothing competes with the card or covers it. The menu-bar
+icon opens a glass popover with an **Away** switch, anything waiting for
+you (Allow/Deny right there), and recent activity. While Away is off,
+permission prompts stay in VS Code as usual and nocnoc keeps out of the way.
 
 You can answer wherever is closer. The agent shows its own prompt at the
 same time, and the first answer wins. When you answer in VS Code, nocnoc
-notices and clears its copy, including a "needs you" notification.
+notices and clears its card and any "needs you" notification.
 
-The question panel is a frosted-glass card that blurs whatever is behind it.
-Keys: **1–9** pick an option, **⏎** sends, **Esc** hands the question back to
-VS Code. Drag the card anywhere to move it.
-
-Toggle **Away** in the menu bar. While it's off, permission prompts stay in
-VS Code as usual and nocnoc keeps out of the way.
+Cards are frosted glass that blurs whatever is behind them. On question
+cards, **1–9** pick an option and **⏎** sends. **Esc** hands any card back to
+VS Code. Drag a card to move it.
 
 ## How it works
 
@@ -49,12 +52,14 @@ VS Code as usual and nocnoc keeps out of the way.
 - **Anything that fails means "no decision", never "allow".** That covers the
   app not running, a timeout (~5 min), Away being off, or the agent
   cancelling. In each case the agent falls back to its normal prompt.
-- **Allow is only offered for what you can read in full.** Commands too long
-  to show get Deny-only on the notification. Their full text and Allow are in
-  the menu-bar submenu, unless even that's too long.
-- **Allow only works when the Mac is unlocked.**
-- **Closing a panel or a notification hands the question back** to the editor.
-  It never answers on your behalf.
+- **Allow is only offered for what you can read in full.** Cards show the
+  whole command (scrolling if it's long). If it was too long even to keep
+  (over 4,000 characters), there's no Allow and you answer in VS Code.
+- **Allow always takes a deliberate click.** Cards never grab keyboard focus
+  when they appear, so typing in your editor can't answer them, and Allow
+  has no keyboard shortcut.
+- **Closing a card hands the prompt back** to the editor. It never answers on
+  your behalf.
 
 ## Install
 

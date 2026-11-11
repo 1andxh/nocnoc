@@ -210,7 +210,7 @@ private struct WaitingCard: View {
                     Button("Answer in VS Code") { afterAnswer(); state.answerInEditor(request.id) }
                         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Answer…") { afterAnswer(); QuestionPanels.shared.focus(request.id) }
+                    Button("Answer…") { afterAnswer(); PromptPanels.shared.focus(request.id) }
                         .buttonStyle(CapsuleButtonStyle(prominent: true))
                 }
             } else {

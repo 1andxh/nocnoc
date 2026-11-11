@@ -2,19 +2,18 @@ import AppKit
 import SwiftUI
 import NocnocCore
 
-/// Floating frosted-glass panels for questions (AskUserQuestion and ask_user),
-/// one per waiting request.
+/// Floating frosted-glass prompt cards, one per waiting request: permission
+/// prompts (Allow / Deny) and questions (AskUserQuestion, ask_user). This is
+/// the only place nocnoc asks you anything; there's no macOS notification
+/// alongside, which used to land on top of the card and compete with it.
 ///
-/// The glass is an NSVisualEffectView with `.behindWindow` blending: macOS
-/// blurs whatever is behind the panel (other apps, the desktop). The window
-/// itself is borderless and clear, so only the rounded glass card shows.
-/// `.nonactivatingPanel` lets it float and take typing without pulling you
-/// out of the app you're in.
+/// Cards never grab keyboard focus when they appear. You might be typing in
+/// your editor, and stray keys (or an Enter) must not answer a prompt. Your
+/// first click on a card focuses it and also counts as a click.
 @MainActor
-final class QuestionPanels: NSObject, NSWindowDelegate {
-    static let shared = QuestionPanels()
+final class PromptPanels: NSObject, NSWindowDelegate {
+    static let shared = PromptPanels()
 
-    static let cornerRadius: CGFloat = 18
     static let width: CGFloat = 400
 
     private var panels: [UUID: NSPanel] = [:]
@@ -22,70 +21,58 @@ final class QuestionPanels: NSObject, NSWindowDelegate {
     private var closingProgrammatically: Set<UUID> = []
 
     func show(_ request: PendingRequest) {
-        guard panels[request.id] == nil, let questions = request.event.questions else { return }
-
-        let model = QuestionModel(questions: questions)
+        guard panels[request.id] == nil else { return }
         let id = request.id
-        let view = QuestionCard(
-            event: request.event, model: model, start: Date(), deadline: request.deadline,
-            onSend: { AppState.shared.answerQuestion(id, model.answers) },
-            onHandBack: { AppState.shared.answerInEditor(id) },
-            onDismiss: { AppState.shared.answer(id, .released) }
-        )
+        let panel: GlassPanel
 
-        let hosting = NSHostingView(rootView: view)
-        // Measure the card's natural height. (Don't set sizingOptions to
-        // .preferredContentSize: then fittingSize reports 0 and the panel is
-        // created 0×0, i.e. invisible.)
-        let measured = hosting.fittingSize.height
-        let size = NSSize(width: Self.width, height: measured > 50 ? measured : 320)
-
-        let panel = KeyablePanel(contentRect: NSRect(origin: .zero, size: size),
-                                 styleMask: [.borderless, .nonactivatingPanel],
-                                 backing: .buffered, defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .floating
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
-        panel.isReleasedWhenClosed = false
-        panel.isMovableByWindowBackground = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.delegate = self
-        panel.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
-
-        // Glass card: blur what's behind the window, clipped to a rounded rect.
-        let glass = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
-        glass.material = .popover          // adapts to light/dark; frosted and translucent
-        glass.blendingMode = .behindWindow
-        glass.state = .active              // stay frosted even when nocnoc isn't the active app
-        glass.maskImage = Self.roundedMask(radius: Self.cornerRadius)
-        glass.autoresizingMask = [.width, .height]
-        hosting.frame = glass.bounds
-        hosting.autoresizingMask = [.width, .height]
-        glass.addSubview(hosting)
-        panel.contentView = glass
-
-        // Keyboard: 1-9 pick an option, Esc hands the question back.
-        panel.onKey = { event in
-            guard let digit = event.charactersIgnoringModifiers.flatMap(Int.init), (1...9).contains(digit) else { return false }
-            return model.choose(number: digit)
+        if request.event.kind == .question, let questions = request.event.questions {
+            let model = QuestionModel(questions: questions)
+            panel = makePanel(id, QuestionCard(
+                event: request.event, model: model, start: Date(), deadline: request.deadline,
+                onSend: { AppState.shared.answerQuestion(id, model.answers) },
+                onHandBack: { AppState.shared.answerInEditor(id) },
+                onDismiss: { AppState.shared.answer(id, .released) }))
+            // 1-9 pick an option (once you've clicked into the card).
+            panel.onKey = { event in
+                guard let digit = event.charactersIgnoringModifiers.flatMap(Int.init), (1...9).contains(digit) else { return false }
+                return model.choose(number: digit)
+            }
+        } else {
+            panel = makePanel(id, PermissionCard(
+                event: request.event, start: Date(), deadline: request.deadline,
+                onAllow: { AppState.shared.answer(id, .decided(.allow)) },
+                onDeny: { AppState.shared.answer(id, .decided(.deny)) },
+                onHandBack: { AppState.shared.answerInEditor(id) }))
         }
-        panel.onCancel = { AppState.shared.answerInEditor(id) }
+        panel.onCancel = { AppState.shared.answerInEditor(id) }   // Esc
 
         position(panel, index: panels.count)
         panels[id] = panel
         appear(panel)
     }
 
+    private func makePanel<Card: View>(_ id: UUID, _ card: Card) -> GlassPanel {
+        // Measure the card's natural height first. (Don't set sizingOptions to
+        // .preferredContentSize: fittingSize then reports 0, i.e. a 0×0 panel.)
+        let measured = NSHostingView(rootView: card).fittingSize.height
+        let panel = GlassPanel(size: NSSize(width: Self.width, height: measured > 50 ? measured : 320))
+        panel.delegate = self
+        panel.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
+        panel.setGlassContent(card.modifier(HeightReporter { [weak panel] h in
+            guard h > 50 else { return }
+            panel?.setHeightKeepingTop(h)
+        }))
+        return panel
+    }
+
+    /// Bring a card forward and give it the keyboard (you asked for it).
     func focus(_ id: UUID) {
         guard let panel = panels[id] else { return }
         panel.orderFrontRegardless()
         panel.makeKey()
     }
 
-    /// The request ended (answered, timed out, withdrawn): fade the panel away.
+    /// The request ended (answered, timed out, withdrawn): fade the card away.
     func close(_ id: UUID) {
         guard let panel = panels.removeValue(forKey: id) else { return }
         closingProgrammatically.insert(id)
@@ -106,13 +93,12 @@ final class QuestionPanels: NSObject, NSWindowDelegate {
 
     // MARK: - Window helpers
 
-    /// Fade in while sliding down a few points.
+    /// Fade in while sliding down a few points. Deliberately no makeKey().
     private func appear(_ panel: NSPanel) {
         let final = panel.frame
         panel.alphaValue = 0
         panel.setFrame(final.offsetBy(dx: 0, dy: 10), display: false)
         panel.orderFrontRegardless()
-        panel.makeKey()
         panel.invalidateShadow()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.22
@@ -129,36 +115,6 @@ final class QuestionPanels: NSObject, NSWindowDelegate {
         let offset = CGFloat(index) * 24
         panel.setFrameOrigin(NSPoint(x: screen.maxX - size.width - 14 - offset,
                                      y: screen.maxY - size.height - 10 - offset))
-    }
-
-    /// A stretchable rounded-rect mask: the corners stay round at any size.
-    static func roundedMask(radius: CGFloat) -> NSImage {
-        let edge = radius * 2 + 1
-        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
-    }
-}
-
-/// Borderless panels refuse key status by default; we need it for typing.
-/// It also routes unhandled keys (digits) and Esc back to us.
-private final class KeyablePanel: NSPanel {
-    var onKey: ((NSEvent) -> Bool)?
-    var onCancel: (() -> Void)?
-
-    override var canBecomeKey: Bool { true }
-
-    override func keyDown(with event: NSEvent) {
-        if onKey?(event) != true { super.keyDown(with: event) }
-    }
-
-    override func cancelOperation(_ sender: Any?) {
-        onCancel?()
     }
 }
 
@@ -242,13 +198,10 @@ struct QuestionCard: View {
             }
             footer
         }
-        .padding(18)
-        .frame(width: QuestionPanels.width, alignment: .leading)
-        .overlay(   // thin bright edge: what makes the card read as glass
-            RoundedRectangle(cornerRadius: QuestionPanels.cornerRadius, style: .continuous)
-                .strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .white.opacity(0.08)],
-                                             startPoint: .top, endPoint: .bottom), lineWidth: 1)
-        )
+        .padding(Glass.padding)
+        .frame(width: PromptPanels.width, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .overlay(GlassEdge())
     }
 
     private func send() { if model.isComplete { onSend() } }
@@ -385,11 +338,11 @@ private struct OptionRow: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: Glass.innerRadius, style: .continuous)
                     .fill(selected ? Color.accentColor.opacity(0.18) : .primary.opacity(hovering ? 0.08 : 0.04))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: Glass.innerRadius, style: .continuous)
                     .strokeBorder(selected ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1)
             )
             .contentShape(Rectangle())
@@ -413,8 +366,73 @@ private struct GlassField: View {
             .focused($focused)
             .onSubmit(onSubmit)
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.primary.opacity(0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: Glass.innerRadius, style: .continuous).fill(.primary.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: Glass.innerRadius, style: .continuous)
                 .strokeBorder(focused ? Color.accentColor.opacity(0.7) : .primary.opacity(0.10), lineWidth: 1))
+    }
+}
+
+
+// MARK: - Permission card
+
+struct PermissionCard: View {
+    let event: AgentEvent
+    let start: Date
+    let deadline: Date
+    let onAllow: () -> Void
+    let onDeny: () -> Void
+    let onHandBack: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                AgentBadge(agent: event.agent)
+                if let project = event.project {
+                    Text(project).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Countdown(start: start, deadline: deadline)
+                Button(action: onHandBack) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(.primary.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .help("Hand back to VS Code (Esc)")
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(event.toolName.map { "Wants to use \($0)" } ?? "Wants permission")
+                    .font(.caption2.weight(.semibold)).tracking(0.8).textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Text(event.title).font(.title3.weight(.semibold))
+            }
+
+            CommandView(text: event.detail)
+
+            HStack(spacing: 8) {
+                Button("Answer in VS Code", action: onHandBack)
+                    .buttonStyle(.plain).font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Button("Deny", action: onDeny)
+                    .buttonStyle(CapsuleButtonStyle(destructive: true))
+                // Never Allow what can't be read in full here. And no keyboard
+                // shortcut: approving always takes a deliberate click.
+                if !event.detailIsTruncated {
+                    Button("Allow", action: onAllow)
+                        .buttonStyle(CapsuleButtonStyle(prominent: true))
+                }
+            }
+            if event.detailIsTruncated {
+                Text("Too long to review here. Allow it in VS Code.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(Glass.padding)
+        .frame(width: PromptPanels.width, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .overlay(GlassEdge())
     }
 }

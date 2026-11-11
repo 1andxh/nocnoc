@@ -168,10 +168,14 @@ final class AppState: ObservableObject {
             return
         }
         events = store.all
-        Log.info("event \(event.agent)/\(event.hookEvent) project=\(event.project ?? "-") notify=\(event.shouldNotify && away)")
-        if event.shouldNotify && away {
-            notifier.post(event)
+        // Claude's own "needs you" fires ~6s into a prompt. If nocnoc already
+        // shows a card for that session, a banner on top would only compete.
+        let cardShowing = event.kind == .attention && waiting.contains {
+            $0.event.agent == event.agent && $0.event.sessionID == event.sessionID
         }
+        let notify = event.shouldNotify && away && !cardShowing
+        Log.info("event \(event.agent)/\(event.hookEvent) project=\(event.project ?? "-") notify=\(notify)")
+        if notify { notifier.post(event) }
     }
 
     private func held(_ request: PendingRequest) {
@@ -179,24 +183,18 @@ final class AppState: ObservableObject {
         waiting = pending.all
         let seconds = Int(request.deadline.timeIntervalSinceNow.rounded())
         Log.info("holding \(request.id.uuidString.prefix(8)) \(request.event.toolName ?? "?") project=\(request.event.project ?? "-") for \(seconds)s")
-        if request.event.kind == .question {
-            // The panel IS the alert. A notification as well would land in the
-            // same top-right corner and cover it, so play a sound instead.
-            QuestionPanels.shared.show(request)
-            NSSound(named: "Glass")?.play()
-        } else if away {
-            // Hook requests are only held while Away anyway.
-            notifier.postPermission(request)
-        }
+        // Prompts go through the app only: a glass card plus a sound. No macOS
+        // notification, which would land on top of the card and compete with it.
+        PromptPanels.shared.show(request)
+        NSSound(named: "Glass")?.play()
     }
 
     private func ended(_ request: PendingRequest, _ outcome: Outcome) {
         waiting = pending.all
         Log.info("request \(request.id.uuidString.prefix(8)) ended: \(outcome)")
-        notifier.removePermission(request.id)
         // Claude may also have posted "needs you" for this same prompt: clear it too.
         notifier.clearAttention(agent: request.event.agent, sessionID: request.event.sessionID)
-        QuestionPanels.shared.close(request.id)
+        PromptPanels.shared.close(request.id)
     }
 
     func sendTestNotification() {
