@@ -20,6 +20,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     var onStatus: ((String) -> Void)?
+    /// Sessions whose current notification is a "needs you" (main thread only).
+    private var attentionIDs: Set<String> = []
     private var center: UNUserNotificationCenter { .current() }
 
     func setUp() {
@@ -60,9 +62,23 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     func post(_ event: AgentEvent) {
         let content = baseContent(event)
-        let id = "\(event.agent)-\(event.sessionID ?? event.id.uuidString)"
+        let id = Self.sessionID(event.agent, event.sessionID ?? event.id.uuidString)
+        // Same id per session: a newer event replaces the older notification.
+        if event.kind == .attention { attentionIDs.insert(id) } else { attentionIDs.remove(id) }
         add(id, content)
     }
+
+    /// Remove a session's "needs you" notification once the prompt is answered.
+    /// Leaves "finished" notifications alone.
+    func clearAttention(agent: String, sessionID: String?) {
+        guard let sessionID else { return }
+        let id = Self.sessionID(agent, sessionID)
+        guard attentionIDs.remove(id) != nil else { return }
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+        Log.info("cleared \(id.prefix(16)): answered")
+    }
+
+    private static func sessionID(_ agent: String, _ session: String) -> String { "\(agent)-\(session)" }
 
     func postPermission(_ request: PendingRequest) {
         let event = request.event

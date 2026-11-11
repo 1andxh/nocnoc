@@ -7,6 +7,8 @@ public struct AgentEvent: Codable, Identifiable, Equatable {
         case question     // AskUserQuestion; answered from the floating panel (Phase 4)
         case attention    // Notification hook: "needs you"
         case finished     // Stop hook
+        case activity     // the session moved on (tool ran, prompt submitted, permission denied):
+                          // used to clear a stale "needs you" notification, never shown
         case other
     }
 
@@ -138,6 +140,10 @@ public struct AgentEvent: Codable, Identifiable, Equatable {
             kind = .attention
             title = "\(name) needs you"
             text = (obj["message"] as? String) ?? (obj["notification_type"] as? String) ?? "Waiting for your input"
+        case "PostToolUse", "PostToolUseFailure", "PermissionDenied", "UserPromptSubmit":
+            kind = .activity
+            title = "\(name): \(hookEvent)"
+            text = toolName ?? ""
         case "Stop":
             kind = .finished
             title = "\(name) finished"
@@ -152,7 +158,7 @@ public struct AgentEvent: Codable, Identifiable, Equatable {
                           sessionID: obj["session_id"] as? String, projectDir: projectDir, title: title,
                           body: truncate(short ?? text, to: maxBodyLength), detail: truncate(text, to: maxDetailLength),
                           detailIsTruncated: text.count > maxDetailLength,
-                          shouldNotify: kind != .other,
+                          shouldNotify: kind != .other && kind != .activity,
                           questions: questions,
                           toolInput: obj["tool_input"].flatMap { try? JSONSerialization.data(withJSONObject: $0) })
     }

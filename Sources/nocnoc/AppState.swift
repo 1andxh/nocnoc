@@ -162,6 +162,11 @@ final class AppState: ObservableObject {
     // MARK: - Server callbacks (already hopped to main)
 
     private func received(_ event: AgentEvent) {
+        if event.kind == .activity {
+            // You answered in the editor and the session moved on.
+            notifier.clearAttention(agent: event.agent, sessionID: event.sessionID)
+            return
+        }
         events = store.all
         Log.info("event \(event.agent)/\(event.hookEvent) project=\(event.project ?? "-") notify=\(event.shouldNotify && away)")
         if event.shouldNotify && away {
@@ -189,6 +194,8 @@ final class AppState: ObservableObject {
         waiting = pending.all
         Log.info("request \(request.id.uuidString.prefix(8)) ended: \(outcome)")
         notifier.removePermission(request.id)
+        // Claude may also have posted "needs you" for this same prompt: clear it too.
+        notifier.clearAttention(agent: request.event.agent, sessionID: request.event.sessionID)
         QuestionPanels.shared.close(request.id)
     }
 

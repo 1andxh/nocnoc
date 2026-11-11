@@ -84,7 +84,9 @@ public struct Router {
             ) else {
                 return .error(400, "body is not a JSON object")
             }
-            store.append(event)
+            // Activity events are frequent (every tool call) and only used to
+            // clear notifications, so they stay out of the recent list.
+            if event.kind != .activity { store.append(event) }
             return handleHook(event, req, connection)
         case ("POST", "/v1/ask"):
             return handleAsk(req, connection)

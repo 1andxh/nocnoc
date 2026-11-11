@@ -74,3 +74,19 @@ final class AgentEventTests: XCTestCase {
         XCTAssertNil(event("not json"))
     }
 }
+
+final class ActivityEventTests: XCTestCase {
+    func testActivityEventsAreNotShownOrStored() throws {
+        let store = EventStore()
+        var seen: [AgentEvent] = []
+        let router = Router(store: store, isAway: { true }, onEvent: { seen.append($0) })
+        for name in ["PostToolUse", "PostToolUseFailure", "PermissionDenied", "UserPromptSubmit"] {
+            let body = #"{"hook_event_name":"\#(name)","session_id":"s","tool_name":"Bash"}"#
+            let resp = router.handle(HTTPRequest(method: "POST", path: "/v1/hooks/claude", body: Data(body.utf8)))
+            XCTAssertEqual(resp, .noDecision)
+        }
+        XCTAssertEqual(seen.map(\.kind), Array(repeating: .activity, count: 4), "app still hears them, to clear notifications")
+        XCTAssertTrue(seen.allSatisfy { !$0.shouldNotify })
+        XCTAssertTrue(store.all.isEmpty, "they must not flood the recent list")
+    }
+}

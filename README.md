@@ -15,6 +15,9 @@ it can carry on without you switching windows.
 | calls `ask_user` mid-task (MCP tool, any agent) | the same panel | answer, or let it time out |
 | needs your attention, or finished | a notification | click it to jump to that project in VS Code |
 
+A "needs you" notification clears itself once the prompt is answered, whether
+you answered in nocnoc or in VS Code.
+
 Toggle **Away** in the menu bar. While it's off, permission prompts stay in
 VS Code as usual and nocnoc keeps out of the way.
 
@@ -81,10 +84,19 @@ Add to `~/.claude/settings.json` (all projects) or
   "hooks": {
     "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude 300", "timeout": 320 }] }],
     "Notification":      [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude", "timeout": 10 }] }],
-    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude", "timeout": 10 }] }]
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude", "timeout": 10 }] }],
+    "PostToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude", "timeout": 5 }] }],
+    "PostToolUseFailure": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude", "timeout": 5 }] }],
+    "PermissionDenied":   [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude", "timeout": 5 }] }],
+    "UserPromptSubmit":   [{ "hooks": [{ "type": "command", "command": "~/Applications/nocnoc.app/Contents/Resources/nocnoc-hook.sh claude", "timeout": 5 }] }]
   }
 }
 ```
+
+The last four are "the session moved on" signals. When you answer a prompt in
+VS Code instead of nocnoc, they let nocnoc clear that session's "needs you"
+notification. `PostToolUse` runs on every tool call, which costs one short
+local `curl`.
 
 ```sh
 claude mcp add --transport stdio --scope user nocnoc -- ~/Applications/nocnoc.app/Contents/MacOS/nocnoc-mcp
