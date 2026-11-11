@@ -2,49 +2,81 @@ import AppKit
 import SwiftUI
 import NocnocCore
 
-/// Floating panels for AskUserQuestion, one per waiting question request.
+/// Floating frosted-glass panels for questions (AskUserQuestion and ask_user),
+/// one per waiting request.
 ///
-/// NSPanel with .nonactivatingPanel: it floats above other apps and can take
-/// keyboard input (for "Other…") without pulling you out of whatever app
-/// you're in.
+/// The glass is an NSVisualEffectView with `.behindWindow` blending: macOS
+/// blurs whatever is behind the panel (other apps, the desktop). The window
+/// itself is borderless and clear, so only the rounded glass card shows.
+/// `.nonactivatingPanel` lets it float and take typing without pulling you
+/// out of the app you're in.
 @MainActor
 final class QuestionPanels: NSObject, NSWindowDelegate {
     static let shared = QuestionPanels()
 
+    static let cornerRadius: CGFloat = 18
+    static let width: CGFloat = 400
+
     private var panels: [UUID: NSPanel] = [:]
-    /// Panels closed by us (answered/ended) vs by you (the close button).
+    /// Panels closed by us (answered/ended) vs. by the user.
     private var closingProgrammatically: Set<UUID> = []
 
     func show(_ request: PendingRequest) {
         guard panels[request.id] == nil, let questions = request.event.questions else { return }
 
-        let view = QuestionView(
-            event: request.event, questions: questions, deadline: request.deadline,
-            onSend: { answers in AppState.shared.answerQuestion(request.id, answers) },
-            onAnswerInEditor: { AppState.shared.answerInEditor(request.id) }
+        let model = QuestionModel(questions: questions)
+        let id = request.id
+        let view = QuestionCard(
+            event: request.event, model: model, start: Date(), deadline: request.deadline,
+            onSend: { AppState.shared.answerQuestion(id, model.answers) },
+            onHandBack: { AppState.shared.answerInEditor(id) },
+            onDismiss: { AppState.shared.answer(id, .released) }
         )
-        let hosting = NSHostingView(rootView: view)
-        hosting.frame.size = hosting.fittingSize
 
-        let panel = KeyablePanel(
-            contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
-            styleMask: [.titled, .closable, .nonactivatingPanel, .fullSizeContentView],
-            backing: .buffered, defer: false)
-        panel.title = request.event.title
-        panel.titlebarAppearsTransparent = true
-        panel.contentView = hosting
+        let hosting = NSHostingView(rootView: view)
+        // Measure the card's natural height. (Don't set sizingOptions to
+        // .preferredContentSize: then fittingSize reports 0 and the panel is
+        // created 0×0, i.e. invisible.)
+        let measured = hosting.fittingSize.height
+        let size = NSSize(width: Self.width, height: measured > 50 ? measured : 320)
+
+        let panel = KeyablePanel(contentRect: NSRect(origin: .zero, size: size),
+                                 styleMask: [.borderless, .nonactivatingPanel],
+                                 backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.level = .floating
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
+        panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.delegate = self
-        panel.identifier = NSUserInterfaceItemIdentifier(request.id.uuidString)
+        panel.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
+
+        // Glass card: blur what's behind the window, clipped to a rounded rect.
+        let glass = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        glass.material = .popover          // adapts to light/dark; frosted and translucent
+        glass.blendingMode = .behindWindow
+        glass.state = .active              // stay frosted even when nocnoc isn't the active app
+        glass.maskImage = Self.roundedMask(radius: Self.cornerRadius)
+        glass.autoresizingMask = [.width, .height]
+        hosting.frame = glass.bounds
+        hosting.autoresizingMask = [.width, .height]
+        glass.addSubview(hosting)
+        panel.contentView = glass
+
+        // Keyboard: 1-9 pick an option, Esc hands the question back.
+        panel.onKey = { event in
+            guard let digit = event.charactersIgnoringModifiers.flatMap(Int.init), (1...9).contains(digit) else { return false }
+            return model.choose(number: digit)
+        }
+        panel.onCancel = { AppState.shared.answerInEditor(id) }
 
         position(panel, index: panels.count)
-        panels[request.id] = panel
-        panel.orderFrontRegardless()
-        panel.makeKey()
+        panels[id] = panel
+        appear(panel)
     }
 
     func focus(_ id: UUID) {
@@ -53,14 +85,16 @@ final class QuestionPanels: NSObject, NSWindowDelegate {
         panel.makeKey()
     }
 
-    /// The request ended (answered, timed out, withdrawn): take the panel away.
+    /// The request ended (answered, timed out, withdrawn): fade the panel away.
     func close(_ id: UUID) {
         guard let panel = panels.removeValue(forKey: id) else { return }
         closingProgrammatically.insert(id)
-        panel.close()
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.18
+            panel.animator().alphaValue = 0
+        }, completionHandler: { panel.close() })
     }
 
-    // You clicked the close button: hand the question back to the editor.
     func windowWillClose(_ notification: Notification) {
         guard let panel = notification.object as? NSPanel,
               let raw = panel.identifier?.rawValue, let id = UUID(uuidString: raw) else { return }
@@ -70,128 +104,107 @@ final class QuestionPanels: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Top-right of the screen, stacked downwards if several are open.
+    // MARK: - Window helpers
+
+    /// Fade in while sliding down a few points.
+    private func appear(_ panel: NSPanel) {
+        let final = panel.frame
+        panel.alphaValue = 0
+        panel.setFrame(final.offsetBy(dx: 0, dy: 10), display: false)
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        panel.invalidateShadow()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+            panel.animator().setFrame(final, display: true)
+        }
+    }
+
+    /// Top-right of the screen, below the menu bar; stacked if several are open.
     private func position(_ panel: NSPanel, index: Int) {
         guard let screen = NSScreen.main?.visibleFrame else { return }
         let size = panel.frame.size
-        let offset = CGFloat(index) * 28
-        panel.setFrameOrigin(NSPoint(x: screen.maxX - size.width - 16 - offset,
-                                     y: screen.maxY - size.height - 16 - offset))
+        let offset = CGFloat(index) * 24
+        panel.setFrameOrigin(NSPoint(x: screen.maxX - size.width - 14 - offset,
+                                     y: screen.maxY - size.height - 10 - offset))
+    }
+
+    /// A stretchable rounded-rect mask: the corners stay round at any size.
+    static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 }
 
-/// Non-activating panels refuse key status by default; we need it for typing.
+/// Borderless panels refuse key status by default; we need it for typing.
+/// It also routes unhandled keys (digits) and Esc back to us.
 private final class KeyablePanel: NSPanel {
+    var onKey: ((NSEvent) -> Bool)?
+    var onCancel: (() -> Void)?
+
     override var canBecomeKey: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if onKey?(event) != true { super.keyDown(with: event) }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        onCancel?()
+    }
 }
 
-// MARK: - The panel's content
+// MARK: - Model
 
-struct QuestionView: View {
-    let event: AgentEvent
+/// What you've picked so far. A class (not view @State) so the panel's key
+/// handler can change it too.
+@MainActor
+final class QuestionModel: ObservableObject {
     let questions: [AgentEvent.Question]
-    let deadline: Date
-    let onSend: ([String: String]) -> Void
-    let onAnswerInEditor: () -> Void
+    @Published var chosen: [Int: Set<String>] = [:]   // option labels, per question
+    @Published var other: [Int: String] = [:]         // typed answer, per question
 
-    @State private var chosen: [Int: Set<String>] = [:]   // option labels, per question
-    @State private var other: [Int: String] = [:]         // typed "Other" answer, per question
+    init(questions: [AgentEvent.Question]) { self.questions = questions }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(event.project ?? event.agent).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text(timerInterval: Date()...deadline, countsDown: true)
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    .help("After this, the question goes back to VS Code")
-            }
+    var numbersEnabled: Bool { questions.count == 1 }
 
-            ForEach(Array(questions.enumerated()), id: \.offset) { index, q in
-                questionBlock(index, q)
-                if index < questions.count - 1 { Divider() }
-            }
-
-            HStack {
-                Button("Answer in VS Code", action: onAnswerInEditor)
-                Spacer()
-                Button("Send") { onSend(answers) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!QuestionReply.isComplete(answers, for: questions))
-            }
+    func toggle(_ index: Int, _ label: String) {
+        let q = questions[index]
+        var set = chosen[index, default: []]
+        if q.multiSelect == true {
+            if set.contains(label) { set.remove(label) } else { set.insert(label) }
+        } else {
+            set = [label]
+            other[index] = ""
         }
-        .padding(16)
-        .padding(.top, 12)   // room for the transparent title bar
-        .frame(width: 380)
+        chosen[index] = set
     }
 
-    @ViewBuilder
-    private func questionBlock(_ index: Int, _ q: AgentEvent.Question) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let header = q.header, !header.isEmpty {
-                Text(header.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            }
-            if let context = q.context, !context.isEmpty {
-                Text(context).font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Text(q.question).font(.headline).fixedSize(horizontal: false, vertical: true)
-            if q.multiSelect == true {
-                Text("Choose any").font(.caption).foregroundStyle(.secondary)
-            }
-
-            ForEach(q.options, id: \.label) { option in
-                optionRow(index, q, option)
-            }
-
-            if q.offersOther {
-                TextField(q.options.isEmpty ? "Your answer" : "Other…", text: Binding(
-                    get: { other[index] ?? "" },
-                    set: { text in
-                        other[index] = text
-                        // Typing an answer replaces a single-choice selection.
-                        if q.multiSelect != true, !text.isEmpty { chosen[index] = [] }
-                    }))
-                    .textFieldStyle(.roundedBorder)
-            }
-        }
+    /// Number keys pick options, only when there's a single question
+    /// (with several, "2" would be ambiguous).
+    func choose(number n: Int) -> Bool {
+        guard numbersEnabled, let q = questions.first, n <= q.options.count else { return false }
+        toggle(0, q.options[n - 1].label)
+        return true
     }
 
-    private func optionRow(_ index: Int, _ q: AgentEvent.Question, _ option: AgentEvent.Question.Option) -> some View {
-        let multi = q.multiSelect == true
-        let isOn = chosen[index, default: []].contains(option.label)
-        return Button {
-            var set = chosen[index, default: []]
-            if multi {
-                if isOn { set.remove(option.label) } else { set.insert(option.label) }
-            } else {
-                set = [option.label]
-                other[index] = ""
-            }
-            chosen[index] = set
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: multi ? (isOn ? "checkmark.square.fill" : "square")
-                                        : (isOn ? "largecircle.fill.circle" : "circle"))
-                    .foregroundStyle(isOn ? Color.accentColor : .secondary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(option.label)
-                    if let d = option.description, !d.isEmpty {
-                        Text(d).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+    func setOther(_ index: Int, _ text: String) {
+        other[index] = text
+        // Typing an answer replaces a single-choice selection.
+        if questions[index].multiSelect != true, !text.isEmpty { chosen[index] = [] }
     }
 
-    /// What gets sent: chosen labels (comma-joined, in offered order) plus any
-    /// typed text. Questions with nothing chosen are left out, which keeps
-    /// Send disabled until everything is answered.
-    private var answers: [String: String] {
+    /// Chosen labels (comma-joined, in offered order) plus any typed text.
+    /// Questions with nothing chosen are left out, which keeps Send disabled.
+    var answers: [String: String] {
         var out: [String: String] = [:]
         for (i, q) in questions.enumerated() {
             var parts: [String] = []
@@ -202,5 +215,264 @@ struct QuestionView: View {
             if !parts.isEmpty { out[q.question] = parts.joined(separator: ", ") }
         }
         return out
+    }
+
+    var isComplete: Bool { QuestionReply.isComplete(answers, for: questions) }
+}
+
+// MARK: - The card
+
+struct QuestionCard: View {
+    let event: AgentEvent
+    @ObservedObject var model: QuestionModel
+    let start: Date
+    let deadline: Date
+    let onSend: () -> Void
+    let onHandBack: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            ForEach(Array(model.questions.enumerated()), id: \.offset) { index, q in
+                QuestionBlock(index: index, question: q, model: model, onSubmit: send)
+                if index < model.questions.count - 1 {
+                    Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
+                }
+            }
+            footer
+        }
+        .padding(18)
+        .frame(width: QuestionPanels.width, alignment: .leading)
+        .overlay(   // thin bright edge: what makes the card read as glass
+            RoundedRectangle(cornerRadius: QuestionPanels.cornerRadius, style: .continuous)
+                .strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .white.opacity(0.08)],
+                                             startPoint: .top, endPoint: .bottom), lineWidth: 1)
+        )
+    }
+
+    private func send() { if model.isComplete { onSend() } }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            AgentBadge(agent: event.agent)
+            if let project = event.project {
+                Text(project).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Countdown(start: start, deadline: deadline)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .background(Circle().fill(.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .help("Hand back to VS Code (Esc)")
+        }
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button(action: onHandBack) {
+                    Text("Answer in VS Code").font(.callout)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button(action: send) {
+                    Text("Send")
+                        .font(.callout.weight(.semibold))
+                        .padding(.horizontal, 18).padding(.vertical, 7)
+                        .background(Capsule().fill(Color.accentColor.opacity(model.isComplete ? 1 : 0.35)))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!model.isComplete)
+            }
+            Text(model.numbersEnabled ? "1–9 choose  ·  ⏎ send  ·  esc hand back" : "⏎ send  ·  esc hand back")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+private struct QuestionBlock: View {
+    let index: Int
+    let question: AgentEvent.Question
+    @ObservedObject var model: QuestionModel
+    let onSubmit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let header = question.header, !header.isEmpty {
+                Text(header.uppercased())
+                    .font(.caption2.weight(.semibold)).tracking(0.8)
+                    .foregroundStyle(.secondary)
+            }
+            if let context = question.context, !context.isEmpty {
+                Text(context).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(question.question)
+                .font(.title3.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            if question.multiSelect == true {
+                Text("Choose any").font(.caption).foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 6) {
+                ForEach(Array(question.options.enumerated()), id: \.offset) { n, option in
+                    OptionRow(number: model.numbersEnabled ? n + 1 : nil,
+                              option: option,
+                              multi: question.multiSelect == true,
+                              selected: model.chosen[index, default: []].contains(option.label)) {
+                        model.toggle(index, option.label)
+                    }
+                }
+            }
+            .padding(.top, 2)
+
+            if question.offersOther {
+                GlassField(placeholder: question.options.isEmpty ? "Your answer" : "Something else…",
+                           text: Binding(get: { model.other[index] ?? "" }, set: { model.setOther(index, $0) }),
+                           onSubmit: onSubmit)
+            }
+        }
+    }
+}
+
+private struct OptionRow: View {
+    let number: Int?
+    let option: AgentEvent.Question.Option
+    let multi: Bool
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 10) {
+                if let number {
+                    Text("\(number)")
+                        .font(.caption.monospacedDigit().weight(.medium))
+                        .foregroundStyle(selected ? .white : .secondary)
+                        .frame(width: 20, height: 20)
+                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(selected ? Color.accentColor : .primary.opacity(0.08)))
+                } else {
+                    Image(systemName: multi ? (selected ? "checkmark.square.fill" : "square")
+                                            : (selected ? "largecircle.fill.circle" : "circle"))
+                        .foregroundStyle(selected ? Color.accentColor : .secondary)
+                        .frame(width: 20)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.label).font(.body.weight(selected ? .semibold : .regular))
+                    if let d = option.description, !d.isEmpty {
+                        Text(d).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+                if selected && number != nil {
+                    Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(selected ? Color.accentColor.opacity(0.18) : .primary.opacity(hovering ? 0.08 : 0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(selected ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: selected)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+private struct GlassField: View {
+    let placeholder: String
+    @Binding var text: String
+    let onSubmit: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .focused($focused)
+            .onSubmit(onSubmit)
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.primary.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(focused ? Color.accentColor.opacity(0.7) : .primary.opacity(0.10), lineWidth: 1))
+    }
+}
+
+/// Small coloured tag naming the agent.
+private struct AgentBadge: View {
+    let agent: String
+
+    private var tint: Color {
+        switch agent {
+        case "claude": return Color(red: 0.85, green: 0.47, blue: 0.34)
+        case "codex": return Color(red: 0.36, green: 0.55, blue: 0.95)
+        default: return .gray
+        }
+    }
+
+    private var name: String {
+        switch agent {
+        case "claude": return "Claude"
+        case "codex": return "Codex"
+        default: return agent.prefix(1).uppercased() + agent.dropFirst()
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(tint).frame(width: 7, height: 7)
+            Text(name).font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Capsule().fill(tint.opacity(0.18)))
+        .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1))
+    }
+}
+
+/// Ring + m:ss until the question goes back to VS Code.
+private struct Countdown: View {
+    let start: Date
+    let deadline: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let total = max(deadline.timeIntervalSince(start), 1)
+            let left = max(deadline.timeIntervalSince(context.date), 0)
+            HStack(spacing: 5) {
+                ZStack {
+                    Circle().stroke(.primary.opacity(0.12), lineWidth: 2)
+                    Circle().trim(from: 0, to: left / total)
+                        .stroke(left < 30 ? Color.orange : Color.accentColor,
+                                style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 12, height: 12)
+                Text(String(format: "%d:%02d", Int(left) / 60, Int(left) % 60))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .help("After this, the question goes back to VS Code")
+        }
     }
 }

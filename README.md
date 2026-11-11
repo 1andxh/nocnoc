@@ -18,6 +18,10 @@ it can carry on without you switching windows.
 A "needs you" notification clears itself once the prompt is answered, whether
 you answered in nocnoc or in VS Code.
 
+The question panel is a frosted-glass card that blurs whatever is behind it.
+Keys: **1–9** pick an option, **⏎** sends, **Esc** hands the question back to
+VS Code. Drag the card anywhere to move it.
+
 Toggle **Away** in the menu bar. While it's off, permission prompts stay in
 VS Code as usual and nocnoc keeps out of the way.
 
