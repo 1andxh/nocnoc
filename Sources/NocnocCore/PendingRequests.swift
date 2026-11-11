@@ -12,6 +12,7 @@ public enum Outcome: Equatable, CustomStringConvertible {
     case timedOut     // nobody answered before the deadline
     case withdrawn    // the hook went away (agent killed it, or answered elsewhere)
     case released     // you chose "answer in VS Code", dismissed it, or turned Away off
+    case answeredElsewhere  // you answered the agent's own prompt (VS Code) first
 
     public var description: String {
         switch self {
@@ -20,6 +21,7 @@ public enum Outcome: Equatable, CustomStringConvertible {
         case .timedOut: return "timed out"
         case .withdrawn: return "withdrawn"
         case .released: return "released"
+        case .answeredElsewhere: return "answered in the editor"
         }
     }
 }

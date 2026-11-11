@@ -87,6 +87,7 @@ public struct Router {
             // Activity events are frequent (every tool call) and only used to
             // clear notifications, so they stay out of the recent list.
             if event.kind != .activity { store.append(event) }
+            if event.kind == .activity { settleAnsweredElsewhere(by: event) }
             return handleHook(event, req, connection)
         case ("POST", "/v1/ask"):
             return handleAsk(req, connection)
@@ -126,6 +127,24 @@ public struct Router {
         default:
             return .noDecision
         }
+    }
+
+    /// The agent shows its own prompt at the same time as our hook, and the
+    /// first answer wins. When you answer in the editor, the agent doesn't
+    /// cancel our hook, so we'd sit on a stale request until it times out.
+    /// Activity from the same session settles it:
+    /// - the same tool with the same input ran (PostToolUse/Failure) or was
+    ///   denied (PermissionDenied): that's the request you just answered;
+    /// - you sent a new message (UserPromptSubmit): the session has moved on.
+    /// Matching on exact input matters: parallel tool calls in one session
+    /// must not cancel a prompt that's still open.
+    private func settleAnsweredElsewhere(by activity: AgentEvent) {
+        guard let session = activity.sessionID else { return }
+        pending.resolveAll(.answeredElsewhere, where: { held in
+            guard held.event.agent == activity.agent, held.event.sessionID == session else { return false }
+            if activity.hookEvent == "UserPromptSubmit" { return true }
+            return held.event.toolName == activity.toolName && held.event.toolInput == activity.toolInput
+        })
     }
 
     /// ask_user is held whether or not Away is on: the panel is the only place

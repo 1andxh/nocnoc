@@ -15,8 +15,9 @@ it can carry on without you switching windows.
 | calls `ask_user` mid-task (MCP tool, any agent) | the same panel | answer, or let it time out |
 | needs your attention, or finished | a notification | click it to jump to that project in VS Code |
 
-A "needs you" notification clears itself once the prompt is answered, whether
-you answered in nocnoc or in VS Code.
+You can answer wherever is closer. The agent shows its own prompt at the
+same time, and the first answer wins. When you answer in VS Code, nocnoc
+notices and clears its copy, including a "needs you" notification.
 
 The question panel is a frosted-glass card that blurs whatever is behind it.
 Keys: **1–9** pick an option, **⏎** sends, **Esc** hands the question back to

@@ -160,7 +160,8 @@ public struct AgentEvent: Codable, Identifiable, Equatable {
                           detailIsTruncated: text.count > maxDetailLength,
                           shouldNotify: kind != .other && kind != .activity,
                           questions: questions,
-                          toolInput: obj["tool_input"].flatMap { try? JSONSerialization.data(withJSONObject: $0) })
+                          // sortedKeys: stable bytes, so the same input always compares equal
+                          toolInput: obj["tool_input"].flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) })
     }
 
     /// An `ask_user` call from the MCP server: the agent chose to ask you something.

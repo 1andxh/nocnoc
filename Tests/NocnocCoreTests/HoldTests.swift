@@ -153,3 +153,56 @@ final class HoldSocketTests: XCTestCase {
         XCTAssertEqual(outcome, .withdrawn)
     }
 }
+
+/// Answered in VS Code first: activity from the session settles the held request.
+final class AnsweredElsewhereTests: XCTestCase {
+    private func post(_ json: String, wait: Int? = nil) -> HTTPRequest {
+        var h: [String: String] = [:]
+        if let wait { h["x-nocnoc-wait"] = "\(wait)" }
+        return HTTPRequest(method: "POST", path: "/v1/hooks/claude", headers: h, body: Data(json.utf8))
+    }
+
+    private let held = #"{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls","description":"List"}}"#
+
+    /// Hold `held` on a background thread, run `activity`, report the outcome.
+    private func run(activity: String, expectSettled: Bool) {
+        let pending = PendingRequests()
+        var outcome: Outcome?
+        let done = expectation(description: "held request returned")
+        let router = Router(store: EventStore(), pending: pending, isAway: { true },
+                            onResolved: { _, o in outcome = o }, holdMargin: 0)
+        DispatchQueue.global().async {
+            XCTAssertEqual(router.handle(self.post(self.held, wait: 3)), .noDecision)
+            done.fulfill()
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(pending.all.count, 1)
+        _ = router.handle(post(activity))
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(outcome, expectSettled ? .answeredElsewhere : .timedOut)
+    }
+
+    func testSameToolAndInputRanSettlesIt() {
+        // Key order differs from the request: must still match.
+        run(activity: #"{"hook_event_name":"PostToolUse","session_id":"s1","tool_name":"Bash","tool_input":{"description":"List","command":"ls"}}"#,
+            expectSettled: true)
+    }
+
+    func testDeniedInEditorSettlesIt() {
+        run(activity: #"{"hook_event_name":"PermissionDenied","session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls","description":"List"}}"#,
+            expectSettled: true)
+    }
+
+    func testNewUserMessageSettlesEverythingInSession() {
+        run(activity: #"{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"never mind"}"#, expectSettled: true)
+    }
+
+    func testParallelToolInSameSessionDoesNotSettleIt() {
+        run(activity: #"{"hook_event_name":"PostToolUse","session_id":"s1","tool_name":"Bash","tool_input":{"command":"pwd"}}"#,
+            expectSettled: false)
+    }
+
+    func testOtherSessionDoesNotSettleIt() {
+        run(activity: #"{"hook_event_name":"UserPromptSubmit","session_id":"other"}"#, expectSettled: false)
+    }
+}
