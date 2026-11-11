@@ -100,6 +100,25 @@ for base in [16, 32, 128, 256, 512] {
 // A 1024 preview, handy for reviewing the design.
 try png(size: 1024).write(to: root.appendingPathComponent("Resources/AppIcon-1024.png"))
 
+// Asset catalog (what Xcode-built apps ship, and what recent macOS reads
+// first). build-app.sh compiles it into Assets.car with actool.
+let appiconset = root.appendingPathComponent("Resources/Assets.xcassets/AppIcon.appiconset")
+try? FileManager.default.removeItem(at: appiconset)
+try FileManager.default.createDirectory(at: appiconset, withIntermediateDirectories: true)
+var images: [[String: String]] = []
+for base in [16, 32, 128, 256, 512] {
+    for scale in [1, 2] {
+        let name = "icon_\(base)x\(base)\(scale == 2 ? "@2x" : "").png"
+        try png(size: base * scale).write(to: appiconset.appendingPathComponent(name))
+        images.append(["idiom": "mac", "size": "\(base)x\(base)", "scale": "\(scale)x", "filename": name])
+    }
+}
+let contents: [String: Any] = ["images": images, "info": ["author": "xcode", "version": 1]]
+try JSONSerialization.data(withJSONObject: contents, options: [.prettyPrinted, .sortedKeys])
+    .write(to: appiconset.appendingPathComponent("Contents.json"))
+try JSONSerialization.data(withJSONObject: ["info": ["author": "xcode", "version": 1]], options: [.prettyPrinted])
+    .write(to: root.appendingPathComponent("Resources/Assets.xcassets/Contents.json"))
+
 let out = root.appendingPathComponent("Resources/AppIcon.icns")
 let p = Process()
 p.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
