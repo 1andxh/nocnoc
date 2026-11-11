@@ -4,11 +4,20 @@ import PackageDescription
 let package = Package(
     name: "nocnoc",
     platforms: [.macOS(.v14)],
+    products: [
+        .executable(name: "nocnoc", targets: ["nocnoc"]),
+    ],
     targets: [
         // Everything testable without a UI: socket server, HTTP parsing,
         // turning agent hook payloads into events, routing.
         .target(
             name: "NocnocCore",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // The menu-bar app: state, notifications, menu UI.
+        .executableTarget(
+            name: "nocnoc",
+            dependencies: ["NocnocCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
