@@ -21,6 +21,14 @@ cp "$BIN_DIR/nocnoc" "$APP/Contents/MacOS/nocnoc"
 # thing to build and one path to register.
 cp "$BIN_DIR/nocnoc-mcp" "$APP/Contents/MacOS/nocnoc-mcp"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
+# The version people see (and Homebrew compares) comes from the one constant
+# in Router.swift, so the app and its /v1/health can never disagree.
+VERSION="$(sed -n 's/^ *public static let version = "\([^"]*\)".*/\1/p' "$ROOT/Sources/NocnocCore/Router.swift")"
+case "$VERSION" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "build-app.sh: can't read Router.version (got '$VERSION')" >&2; exit 1 ;;
+esac
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 # A build number that grows with every commit. macOS caches app icons (and
 # other per-app data) by bundle id + build number; a constant "1" made it
 # keep serving the first, icon-less build forever.

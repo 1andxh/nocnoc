@@ -33,6 +33,9 @@ public final class EventStore {
 /// response body is then exactly what the hook prints back to the agent.
 /// Everything else gets an empty body: "no decision".
 public struct Router {
+    /// The one place the version lives. build-app.sh copies it into the
+    /// app's Info.plist (CFBundleShortVersionString), and release.sh expects
+    /// a git tag `v<version>` on the commit being released.
     public static let version = "0.5.0"
 
     public let store: EventStore

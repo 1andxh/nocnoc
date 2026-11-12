@@ -16,8 +16,10 @@
     <string>nocnoc</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- Both stamped by scripts/build-app.sh: the version from Router.version,
+         the build number from the commit count. Don't edit them here. -->
     <key>CFBundleShortVersionString</key>
-    <string>0.5.0</string>
+    <string>0.0.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
