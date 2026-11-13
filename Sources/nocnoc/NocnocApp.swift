@@ -45,8 +45,13 @@ struct PopoverView: View {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                 }))
             }
-            if !state.waiting.isEmpty { waiting }
-            recent
+            // Cards and history scroll if they'd run off the screen.
+            ScrollIfNeeded(maxHeight: max(240, (NSScreen.main?.visibleFrame.height ?? 800) - 220)) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if !state.waiting.isEmpty { waiting }
+                    recent
+                }
+            }
             footer
         }
         .padding(Glass.padding)

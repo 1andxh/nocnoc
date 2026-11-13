@@ -23,6 +23,11 @@ final class PromptPanels: NSObject, NSWindowDelegate {
     /// Panels closed by us (answered/ended) vs. by the user.
     private var closingProgrammatically: Set<UUID> = []
 
+    /// Tallest the scrolling middle of a card may get: the screen minus the
+    /// card's fixed header/footer and some breathing room.
+    static var maxBodyHeight: CGFloat {
+        max(200, (NSScreen.main?.visibleFrame.height ?? 800) - 240)
+    }
 
     func show(_ request: PendingRequest) {
         guard panels[request.id] == nil else { return }
@@ -224,10 +229,16 @@ struct QuestionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            ForEach(Array(model.questions.enumerated()), id: \.offset) { index, q in
-                QuestionBlock(index: index, question: q, model: model, onSubmit: send)
-                if index < model.questions.count - 1 {
-                    Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
+            // Header and footer stay put; the questions scroll once they'd be
+            // taller than the screen.
+            ScrollIfNeeded(maxHeight: PromptPanels.maxBodyHeight) {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(Array(model.questions.enumerated()), id: \.offset) { index, q in
+                        QuestionBlock(index: index, question: q, model: model, onSubmit: send)
+                        if index < model.questions.count - 1 {
+                            Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
+                        }
+                    }
                 }
             }
             footer

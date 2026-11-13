@@ -256,3 +256,30 @@ struct CommandView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+/// Lays content out at its natural height, and only becomes a scroll view
+/// (capped at `maxHeight`) when the content is taller than that.
+struct ScrollIfNeeded<Content: View>: View {
+    let maxHeight: CGFloat
+    @ViewBuilder let content: () -> Content
+    @State private var contentHeight: CGFloat = 0
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content()
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+                })
+        }
+        .scrollIndicators(contentHeight > maxHeight ? .visible : .hidden)
+        .scrollDisabled(contentHeight <= maxHeight)
+        .frame(height: min(max(contentHeight, 1), maxHeight))
+        .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+    }
+}
+
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
