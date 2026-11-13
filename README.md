@@ -23,6 +23,14 @@ icon opens a glass popover with an **Away** switch, anything waiting for
 you (Allow/Deny right there), and recent activity. While Away is off,
 permission prompts stay in VS Code as usual and nocnoc keeps out of the way.
 
+**Quiet while you're in VS Code** (on by default; it's in the gear menu).
+While VS Code, a VS Code fork or a terminal is the app in front, prompt cards
+wait out of sight, along with "finished" and "needs you" notifications.
+You're looking at the agent's own prompt, so a card on top would only get in
+the way. Switch to another app while a prompt is still open and its card
+appears. `ask_user` questions always show, because only the card can answer
+them.
+
 You can answer wherever is closer. The agent shows its own prompt at the
 same time, and the first answer wins. When you answer in VS Code, nocnoc
 notices and clears its card and any "needs you" notification.

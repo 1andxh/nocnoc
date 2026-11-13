@@ -17,8 +17,12 @@ final class PromptPanels: NSObject, NSWindowDelegate {
     static let width: CGFloat = 400
 
     private var panels: [UUID: NSPanel] = [:]
+    private var events: [UUID: AgentEvent] = [:]
+    /// Cards that have been on screen at least once (they chime only the first time).
+    private var announced: Set<UUID> = []
     /// Panels closed by us (answered/ended) vs. by the user.
     private var closingProgrammatically: Set<UUID> = []
+
 
     func show(_ request: PendingRequest) {
         guard panels[request.id] == nil else { return }
@@ -48,7 +52,32 @@ final class PromptPanels: NSObject, NSWindowDelegate {
 
         position(panel, index: panels.count)
         panels[id] = panel
-        appear(panel)
+        events[id] = request.event
+        if !AppState.shared.showsCard(request.event) {
+            Log.info("card \(id.uuidString.prefix(8)) waiting: you're in the editor")
+        }
+        refreshVisibility()
+    }
+
+    /// Show or hide every card per Presence: hook prompts wait hidden while
+    /// you're in the editor (you can answer them there) and appear when you
+    /// leave it. Called when a card is added and when the front app changes.
+    func refreshVisibility() {
+        for (id, panel) in panels {
+            guard let event = events[id] else { continue }
+            let shouldShow = AppState.shared.showsCard(event)
+            if shouldShow && !panel.isVisible {
+                Log.info("card \(id.uuidString.prefix(8)) shown")
+                appear(panel)
+                if announced.insert(id).inserted { NSSound(named: "Glass")?.play() }
+            } else if !shouldShow && panel.isVisible {
+                Log.info("card \(id.uuidString.prefix(8)) hidden: you're in the editor")
+                NSAnimationContext.runAnimationGroup({ ctx in
+                    ctx.duration = 0.15
+                    panel.animator().alphaValue = 0
+                }, completionHandler: { panel.orderOut(nil) })
+            }
+        }
     }
 
     private func makePanel<Card: View>(_ id: UUID, _ card: Card) -> GlassPanel {
@@ -68,12 +97,15 @@ final class PromptPanels: NSObject, NSWindowDelegate {
     /// Bring a card forward and give it the keyboard (you asked for it).
     func focus(_ id: UUID) {
         guard let panel = panels[id] else { return }
+        panel.alphaValue = 1
         panel.orderFrontRegardless()
         panel.makeKey()
     }
 
     /// The request ended (answered, timed out, withdrawn): fade the card away.
     func close(_ id: UUID) {
+        events.removeValue(forKey: id)
+        announced.remove(id)
         guard let panel = panels.removeValue(forKey: id) else { return }
         closingProgrammatically.insert(id)
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -87,6 +119,8 @@ final class PromptPanels: NSObject, NSWindowDelegate {
               let raw = panel.identifier?.rawValue, let id = UUID(uuidString: raw) else { return }
         if closingProgrammatically.remove(id) == nil {
             panels.removeValue(forKey: id)
+            events.removeValue(forKey: id)
+            announced.remove(id)
             AppState.shared.answer(id, .released)
         }
     }

@@ -39,6 +39,16 @@ final class AppState: ObservableObject {
             Log.info("recordPayloads = \(recordPayloads)")
         }
     }
+    /// Keep prompt cards (and info notifications) out of the way while VS Code
+    /// or a terminal is the app in front. See Presence.swift.
+    @Published var quietInEditor: Bool {
+        didSet {
+            UserDefaults.standard.set(quietInEditor, forKey: "quietInEditor")
+            Log.info("quietInEditor = \(quietInEditor)")
+            PromptPanels.shared.refreshVisibility()
+        }
+    }
+    @Published private(set) var editorFrontmost = false
     @Published private(set) var openAtLogin = false
     @Published private(set) var events: [AgentEvent] = []
     @Published private(set) var waiting: [PendingRequest] = []
@@ -59,11 +69,13 @@ final class AppState: ObservableObject {
         let record = UserDefaults.standard.bool(forKey: "recordPayloads")
         recordPayloads = record
         recordFlag = LockedBool(record)
+        quietInEditor = UserDefaults.standard.object(forKey: "quietInEditor") as? Bool ?? true
     }
 
     func start() {
         Log.rotateIfNeeded()
         setUpLoginItem()
+        watchFrontmostApp()
         Log.info("nocnoc \(Router.version) starting, socket \(Paths.socket)")
         notifier.onStatus = { [weak self] status in
             DispatchQueue.main.async { self?.notificationStatus = status }
@@ -99,6 +111,32 @@ final class AppState: ObservableObject {
             serverStatus = "Failed: \(error)"
             Log.info("server failed: \(error)")
         }
+    }
+
+    // MARK: - Which app is in front
+
+    private func watchFrontmostApp() {
+        updateFrontmost(NSWorkspace.shared.frontmostApplication)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated { AppState.shared.updateFrontmost(app) }
+        }
+    }
+
+    private func updateFrontmost(_ app: NSRunningApplication?) {
+        // nocnoc itself coming forward (you clicked a card) changes nothing.
+        guard app?.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        let inEditor = Presence.isEditor(app?.bundleIdentifier)
+        guard inEditor != editorFrontmost else { return }
+        editorFrontmost = inEditor
+        PromptPanels.shared.refreshVisibility()
+    }
+
+    /// Whether a held request's card should be on screen right now.
+    func showsCard(_ event: AgentEvent) -> Bool {
+        Presence.showsCard(for: event, editorFrontmost: editorFrontmost, quietInEditor: quietInEditor)
     }
 
     // MARK: - Open at login
@@ -174,6 +212,7 @@ final class AppState: ObservableObject {
             $0.event.agent == event.agent && $0.event.sessionID == event.sessionID
         }
         let notify = event.shouldNotify && away && !cardShowing
+            && Presence.notifies(editorFrontmost: editorFrontmost, quietInEditor: quietInEditor)
         Log.info("event \(event.agent)/\(event.hookEvent) project=\(event.project ?? "-") notify=\(notify)")
         if notify { notifier.post(event) }
     }
@@ -185,8 +224,8 @@ final class AppState: ObservableObject {
         Log.info("holding \(request.id.uuidString.prefix(8)) \(request.event.toolName ?? "?") project=\(request.event.project ?? "-") for \(seconds)s")
         // Prompts go through the app only: a glass card plus a sound. No macOS
         // notification, which would land on top of the card and compete with it.
+        // Shown now, or kept hidden until you leave the editor (Presence.swift).
         PromptPanels.shared.show(request)
-        NSSound(named: "Glass")?.play()
     }
 
     private func ended(_ request: PendingRequest, _ outcome: Outcome) {

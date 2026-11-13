@@ -68,7 +68,7 @@ struct PopoverView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("nocnoc").font(.headline)
-                Text(state.away ? "Away: prompts come to you here" : "At desk: prompts stay in VS Code")
+                Text(statusLine)
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -78,6 +78,12 @@ struct PopoverView: View {
                 .controlSize(.small)
                 .help("Away: send agent prompts to this Mac")
         }
+    }
+
+    private var statusLine: String {
+        if !state.away { return "At desk: prompts stay in VS Code" }
+        if state.quietInEditor && state.editorFrontmost { return "In VS Code: cards wait until you switch away" }
+        return "Away: prompts come to you here"
     }
 
     private func problem(_ text: String, action: (String, () -> Void)?) -> some View {
@@ -131,6 +137,7 @@ struct PopoverView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Menu {
+                Toggle("Quiet while I'm in VS Code", isOn: $state.quietInEditor)
                 Toggle("Open at login", isOn: Binding(get: { state.openAtLogin }, set: { state.setOpenAtLogin($0) }))
                 Toggle("Record raw payloads (debug)", isOn: $state.recordPayloads)
                 Divider()
